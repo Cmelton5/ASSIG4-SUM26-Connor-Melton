@@ -41,8 +41,14 @@ function startSession(res, user) {
   // VULN [V2]/[V3]: the session cookie is missing HttpOnly, SameSite and Secure.
   //   - No HttpOnly  => document.cookie is readable by injected JS (helps XSS).
   //   - No SameSite  => the cookie rides along on cross-site requests (helps CSRF).
-  res.cookie('sid', sid, { path: '/' });
+  res.cookie('sid', sid, { 
+  path: '/',
+  httpOnly: true,
+  sameSite: 'strict', //I looked into lax, but for the transfer of the credits I figured Strict would be better
+  secure: false 
+});
 }
+
 
 app.use((req, res, next) => {
   const sid = req.cookies.sid;
@@ -77,12 +83,15 @@ app.get('/search', (req, res) => {
   const sql = `SELECT id, title, price FROM items WHERE title LIKE '%${q}%'`;
   // =========================================================================
 
-  let rows = [];
+let rows = [];
   try {
-    rows = db.prepare(sql).all();
+    const searchTerm = `%${q}%`; //formatting the % as wildcards to deny my SQL attack
+    rows = db.prepare(sql).all(searchTerm);
   } catch (e) {
+    console.error("Database error:", e);
     rows = [];
   }
+  
   res.send(V.renderSearch({ session: req.session, q, rows }));
 });
 
@@ -100,9 +109,9 @@ app.post('/login', (req, res) => {
   const sql = `SELECT * FROM users WHERE username = '${username}' AND password = '${password}'`;
   // =========================================================================
 
-  let user = null;
+let user = null;
   try {
-    user = db.prepare(sql).get();
+    user = db.prepare(sql).get(username, password);
   } catch (e) {
     user = null;
   }
@@ -162,9 +171,18 @@ app.post('/item/:id/comment', (req, res) => {
   // The comment body is stored as-is and later rendered without escaping
   // (see views.js -> renderItem). Any HTML/JS a user submits becomes part
   // of the page for everyone who views this item.
+  // =========================================================================
+ app.post('/item/:id/comment', (req, res) => {
+  const user = currentUser(req);
+  if (!user) return res.redirect('/login');
+  const body = (req.body.body || '').replace(/[&<>'"]/g, tag => {
+    const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' };
+    return map[tag] || tag;
+  });
+
   db.prepare('INSERT INTO comments (item_id, author, body) VALUES (?, ?, ?)')
     .run(req.params.id, user.username, body);
-  // =========================================================================
+
 
   res.redirect('/item/' + req.params.id + '?msg=' + encodeURIComponent('Comment posted.'));
 });
